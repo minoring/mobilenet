@@ -25,11 +25,7 @@ from datasets import mnist
 from datasets import visualwakewords
 
 datasets_map = {
-    'cifar10': cifar10,
-    'flowers': flowers,
-    'imagenet': imagenet,
-    'mnist': mnist,
-    'visualwakewords': visualwakewords,
+  'imagenet': imagenet,
 }
 
 
