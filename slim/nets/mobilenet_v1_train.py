@@ -13,7 +13,6 @@
 # limitations under the License.
 # ==============================================================================
 """Build and train mobilenet_v1 with options for quantization"""
-
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -102,3 +101,55 @@ def imagenet_inputs(is_training):
 
   image_preprocessing_fn = preprocessing_factory.get_preprocessing(
       'mobilenet_v1', is_training=is_training)
+
+
+def get_checkpoint_init_fn():
+  """Returns the checkpoint init_fn if the checkpoint is provided."""
+  if FLAGS.fine_tune_checkpoint:
+    variables_to_restore = slim.get_variable_to_restore()
+    global_step_reset = tf.compat.v1.assign(
+        tf.compat.v1.train.get_or_create_global_step(), 0)
+    # When restoring from a floating point model, the min/max values for
+    # quantized weights and activations are not present.
+    # We instruct slim to ignore variables that are missing during restoration
+    # by setting ignore_missing_vars=True.
+    slim_init_fn = slim.assign_from_checkpoint_fn(
+        FLAGS.fine_tune_checkpoint,
+        variables_to_restore,
+        ignore_missing_vars=True)
+    
+    def init_fn(sess):
+      slim_init_fn(sess)
+      # If we are restoring from a floating point model, we need to initialize
+      # the global step to zero for the exponential decay to result in
+      # reasonable learning rates.
+      sess.run(global_step_reset)
+    return init_fn
+  else:
+    return None
+
+
+def train_model():
+  """Trains mobilenet_v1."""
+  g, train_tensor = build_model()
+  with g.as_default():
+    slim.learning.train(
+        train_tensor,
+        FLAGS.checkpoint_dir,
+        is_chief=(FLAGS.task == 0),
+        master=FLAGS.master,
+        log_every_n_steps=FLAGS.log_every_n_steps,
+        graph=g,
+        number_of_steps=FLAGS.number_of_steps,
+        save_summaries_secs=FLAGS.save_summaries_secs,
+        save_interval_secs=FLAGS.save_interval_secs,
+        init_fn=get_checkpoint_init_fn(),
+        global_step=tf.compat.v1.train.get_global_step())
+
+
+def main(_):
+  train_model()
+
+
+if __name__ == '__main__':
+  tf.compat.v1.app.run(main)
