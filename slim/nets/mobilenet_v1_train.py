@@ -103,6 +103,57 @@ def imagenet_inputs(is_training):
       'mobilenet_v1', is_training=is_training)
 
 
+def build_model():
+  """Builds graph for model to train with rewrites for quantization.
+
+  Returns:
+    g: Graph with face quantization ops and batch norm folding suitable for
+      training quantized weights.
+    train_tensor: Train op for execution during training.
+  """
+  g = tf.Graph()
+  with g.as_default(), tf.device(
+      tf.compat.v1.train.replica_device_setter(FLAGS.ps_tasks)):
+    inputs, labels = imagenet_inputs(is_training=True)
+    with slim.arg_scope(mobilenet_v1.mobilenet_v1_arg_scope(is_training=True)):
+      logits, _ = mobilenet_v1.mobilenet_v1(
+          inputs,
+          is_training=True,
+          depth_multiplier=FLAGS.depth_multiplier,
+          num_classes=FLAGS.num_classes)
+    
+    tf.compat.v1.losses.softmax_cross_entropy(labels, logits)
+
+    # Call rewriter to produce graph with fake quant ops and folded batch norms
+    # quant_delay delays start of quantization till quant_delay steps, allowing
+    # for better model accuracy.
+    if FLAGS.quantize:
+      contrib_quantize.create_training_graph(quant_delay=get_quant_delay())
+
+    total_loss = tf.compat.v1.losses.get_total_loss(name='total_loss')
+    # Configure the leraning rate using an exponential decay.
+    num_epochs_per_decay = 2.5
+    imagenet_size = 1271167
+    decay_steps = int(imagenet_size / FLAGS.batch_size * num_epochs_per_decay)
+
+    learning_rate = tf.compat.v1.train.exponential_decay(
+        get_learning_rate(),
+        tf.compat.v1.train.get_or_create_global_step(),
+        decay_steps,
+        _LEARNING_RATE_DECAY_FACTOR,
+        staircase=True)
+    opt = tf.compat.v1.train.GradientDescentOptimizer(learning_rate)
+
+    train_tensor = slim.learning.create_train_op(
+        total_loss,
+        optimizer=opt)
+    
+  slim.summaries.add_scalar_summary(total_loss, 'total_loss', 'losses')
+  slim.summaries.add_scalar_summary(learning_rate, 'learning_rate', 'training')
+
+  return g, train_tensor
+
+
 def get_checkpoint_init_fn():
   """Returns the checkpoint init_fn if the checkpoint is provided."""
   if FLAGS.fine_tune_checkpoint:
