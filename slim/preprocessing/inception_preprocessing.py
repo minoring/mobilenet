@@ -23,6 +23,81 @@ import tensorflow as tf
 from tensorflow.python.ops import control_flow_ops
 
 
+def apply_with_random_selector(x, func, num_cases):
+  """Computes func(x, sel), with sel sampled from [0...num_cases-1]
+
+  Args:
+    x: Input Tensor.
+    func: Python function to apply.
+    num_cases: Python int 32, number of cases to sample sel from.
+
+  Returns:
+    The result of func(x, sel), where func receives the value of the
+    selector as a Python integer, but sel is sampled dynamically.
+  """
+  sel = tf.random_uniform([], maxval=num_cases, dtype=tf.int32)
+  # Pass the real x only to one of the func calls.
+  return control_flow_ops.merge([
+      func(control_flow_ops.switch(x, tf.equal(sel, case))[1], case)
+      for case in range(num_cases)])[0]
+
+
+def distort_color(image, color_ordering=0, fast_mode=True, scope=None):
+  """Distort the color of a Tensor image.
+
+  Each color distortion is non-commutative and thus ordering of the color ops
+  matters. Ideally we would randomly permute the ordering of the color ops.
+  Rather then adding that level of complication, we select a distinct ordering
+  of color ops for each preprocessing thread.
+
+  Args:
+    image: 3-D Tenosr containing single image in [0, 1].
+    color_ordering: Python int, a type of distortion (valid values: 0-3).
+    fast_mode: Avoid slower ops (random_hue, random_contrast).
+    scope: Optional scope for name_scope.
+
+  Returns:
+    3-D Tensor color-distorted image on range [0, 1].
+
+  Raises:
+    ValueError: If color_ordering not in [0, 3].
+  """
+  with tf.name_scope(scope, 'distort_color', [image]):
+    if fast_mode:
+      if color_ordering == 0:
+        image = tf.image.random_brightness(image, max_delta=32. / 255.)
+        image = tf.image.random_saturation(image, lower=0.5, upper=1.5)
+      else:
+        image = tf.image.random_saturation(image, lower=0.5, upper=1.5)
+        image = tf.image.random_brightness(image, max_delta=32. / 255.)
+    else:
+      if color_ordering == 0:
+        image = tf.image.random_brightness(image, max_delta=32. / 255.)
+        image = tf.image.random_saturation(image, lower=0.5, upper=1.5)
+        image = tf.image.random_hue(image, max_delta=0.2)
+        image = tf.image.random_contrast(image, lower=0.5, upper=1.5)
+      elif color_ordering == 1:
+        image = tf.image.random_saturation(image, lower=0.5, upper=1.5)
+        image = tf.image.random_brightness(image, max_delta=32. / 255.)
+        image = tf.image.random_contrast(image, lower=0.5, upper=1.5)
+        image = tf.image.random_hue(image, max_delta=0.2)
+      elif color_ordering == 2:
+        image = tf.image.random_contrast(image, lower=0.5, upper=1.5)
+        image = tf.image.random_hue(image, max_delta=0.2)
+        image = tf.image.random_brightness(image, max_delta=32. / 255.)
+        image = tf.image.random_saturation(image, lower=0.5, upper=1.5)
+      elif color_ordering == 3:
+        image = tf.image.random_hue(image, max_delta=0.2)
+        image = tf.image.random_saturation(image, lower=0.5, upper=1.5)
+        image = tf.image.random_contrast(image, lower=0.5, upper=1.5)
+        image = tf.image.random_brightness(image, max_delta=32. / 255.)
+      else:
+        raise ValueError('color_ordering must be in [0, 3]')
+
+    # The random_* ops do not necessarily clamp.
+    return tf.clip_by_value(image, 0.0, 1.0)
+
+
 def distorted_bounding_box_crop(image,
                                 bbox,
                                 min_object_covered=0.1,
@@ -51,7 +126,7 @@ def distorted_bounding_box_crop(image,
       region of the image of the specified constraints. After `max_attemps`
       failures, return the entire image.
     scope: Optional scope for name_scope.
-  
+
   Returns:
     A tuple, a 3-D Tensor cropped_image and the distorted bbox.
   """
@@ -79,7 +154,6 @@ def distorted_bounding_box_crop(image,
     # Crop the image to the specified bounding box.
     cropped_image = tf.slice(image, bbox_begin, bbox_size)
     return cropped_image, distort_bbox
-
 
 
 def preprocess_for_train(image,
@@ -134,13 +208,46 @@ def preprocess_for_train(image,
                                                   bbox)
     if add_image_summaries:
       tf.summary.image('image_with_bounding_boxes', image_with_box)
-    
+
     if not random_crop:
       distorted_image = image
     else:
       distorted_image, distorted_box = distorted_bounding_box_crop(image, bbox)
+      # Restore the shape since the dynamic slice based upon the bbox_size loses
+      # the thrid dimension.
+      distorted_image.set_shape([None, None, 3])
+      image_with_distorted_box = tf.image.draw_bounding_boxes(
+        tf.expand_dims(image, 0), distorted_bbox)
+      if add_image_summaries:
+        tf.summary.image('images_with_distorted_bounding_box',
+                         image_with_distorted_box)
 
-  
+      # This resizing operation may distort the images because the aspect
+      # ratio is not respected. We selett a resize method in a round robin
+      # fashion based on the thread number.
+      # Note that ResizeMethod contains 4 enumerated resizing methods.
+
+      # We select only 1 case for fast_mode bilinear.
+      num_resize_case = 1 if fast_mode else 4
+      distorted_image = apply_with_random_selector(
+          distorted_image,
+          lambda x, method: tf.image.resize_images(x, [height, width], method),
+          num_cases=num_resize_case)
+
+      if add_image_summaries:
+        tf.summary.image(('cropped_' if random_crop else '') + 'resized_image',
+                           tf.expand_dims(distorted_image, 0))
+
+      # Randomly flip the image horizontally.
+      distorted_image = tf.image.random_flip_left_right(distorted_image)
+
+      # Randomly distort the color. There are 1 or 4 ways to do it.
+      num_distort_cases = 1 if fast_mode else 4
+      distorted_image = apply_with_random_selector(
+          distorted_image,
+          lambda x, ordering: distort_color(x, ordering, fast_mode),
+          num_cases=num_distort_cases)
+
 
 
 def preprocess_image(image,
@@ -153,7 +260,7 @@ def preprocess_image(image,
                      crop_image=True,
                      use_grayscale=False):
   """Pre-process one image for training or validation.
-  
+
   Args:
     image: 3D Tensor [height, width, channels] of image. If dtype is
       tf.float32 then the range should be [0, 1), otherwise it would converted
@@ -172,7 +279,7 @@ def preprocess_image(image,
     crop_image: Whether to enable cropping of images during preprocessing for
       both training and evaluation.
     use_grayscale: Whether to convert the image from RGB to grayscale.
-  
+
   Returns:
     3-D float Tensor containing an appropriately scaled image.
   """
