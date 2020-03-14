@@ -102,6 +102,15 @@ def imagenet_inputs(is_training):
   image_preprocessing_fn = preprocessing_factory.get_preprocessing(
       'mobilenet_v1', is_training=is_training)
 
+  image = image_preprocessing_fn(image, FLAGS.image_size, FLAGS.image_size)
+
+  images, labels = tf.compat.v1.train.batch([image, label],
+                                            batch_size=FLAGS.batch_size,
+                                            num_threads=4,
+                                            capacity=5 * FLAGS.batch_size)
+  labels = slim.one_hot_encoding(labels, FLAGS.num_classes)
+  return images, labels
+
 
 def build_model():
   """Builds graph for model to train with rewrites for quantization.
