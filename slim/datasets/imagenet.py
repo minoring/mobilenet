@@ -125,7 +125,7 @@ def get_split(split_name, dataset_dir, file_pattern=None, reader=None):
     file_pattern: The file pattern to use when matching the dataset sources.
       If is assumed that the pattern contains a '%s' string so that the split
       name can be inserted.
-    reader: The TensorFLow reader type.
+    reader: The TensorFlow reader type.
 
   Returns:
     A `Dataset` namedtuple.

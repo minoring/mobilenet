@@ -31,6 +31,7 @@ datasets_map = {
 
 def get_dataset(name, split_name, dataset_dir, file_pattern=None, reader=None):
   """Given a dataset name and a split_name returns a Dataset.
+
   Args:
     name: String, the name of the dataset.
     split_name: A train/test split name.
@@ -40,6 +41,7 @@ def get_dataset(name, split_name, dataset_dir, file_pattern=None, reader=None):
       reader defined by each dataset is used.
   Returns:
     A `Dataset` class.
+
   Raises:
     ValueError: If the dataset `name` is unknown.
   """

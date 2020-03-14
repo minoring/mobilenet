@@ -23,6 +23,126 @@ import tensorflow as tf
 from tensorflow.python.ops import control_flow_ops
 
 
+def distorted_bounding_box_crop(image,
+                                bbox,
+                                min_object_covered=0.1,
+                                aspect_ratio_range=(0.75, 1.33),
+                                area_range=(0.05, 1.0),
+                                max_attempts=100,
+                                scope=None):
+  """Generates cropped_image using a one of the bboxes randomly distorted.
+
+  See `tf.image.sample_distorted_bounding_box` for more documentation.
+
+  Args:
+    image: 3-D Tensor of image (it will be converted to floats in [0, 1]).
+    bbox: 3-D float Tensor of bounding boxes arranged [1, num_boxes, corrds]
+      where each coordinates is [0, 1) and the coordinates are arranged
+      as [ymin, xmin, ymax, xmax]. If num_boxes is 0 then it would use the while
+      image.
+    min_object_covered: An optional `float`. Default to `0.1`. The cropped
+      area of the image must contain at least this fraction of any bounding box
+      supplied.
+    aspect_ration_range: An optional list of `floats`. The cropped area of the
+      image must have an aspect ration = width / height within this range.
+    area_range: An optional list of `floats`. The cropped area of the image
+      must contain an fraction of the supplied image within in this range.
+    max_attempts: An optional `int`. Number of attempts at generating a cropped
+      region of the image of the specified constraints. After `max_attemps`
+      failures, return the entire image.
+    scope: Optional scope for name_scope.
+  
+  Returns:
+    A tuple, a 3-D Tensor cropped_image and the distorted bbox.
+  """
+  with tf.name_scope(scope, 'distorted_bounding_box_crop', [image, bbox]):
+    # Each bounding box has shape [1, num_boxes, box_coords] and
+    # the coordinates are ordered [ymin, xmin, ymax, xmax]
+
+    # A large fraction of image datasets contain a human-annotated bounding
+    # box delineating the region of the image containing the object of interest.
+    # We choose to create a new bounding box for the object which is a randomly
+    # distorted version of the human-annotated bounding box that obeys an
+    # allowed range of aspect ratios, sizes and overlap with the human-annotated
+    # bounding box. If no box is supplied, then we assume the bounding box is
+    # the entire image.
+    sample_distorted_bounding_box = tf.image.sampel_distorted_bounding_box(
+        tf.shape(image),
+        bounding_boxes=bbox,
+        min_object_covered=min_object_covered,
+        aspect_ratio_range=aspect_ratio_range,
+        area_range=area_range,
+        max_attempts=max_attempts,
+        use_image_if_no_bounding_boxes=True)
+    bbox_begin, bbox_size, distort_bbox = sample_distorted_bounding_box
+
+    # Crop the image to the specified bounding box.
+    cropped_image = tf.slice(image, bbox_begin, bbox_size)
+    return cropped_image, distort_bbox
+
+
+
+def preprocess_for_train(image,
+                         height,
+                         width,
+                         bbox,
+                         fast_mode=True,
+                         scope=None,
+                         add_image_summaries=True,
+                         random_crop=True,
+                         use_grayscale=False):
+  """Distort one image for training a network.
+
+  Distorting images provides a useful technique for augmenting the data
+  set during training in order to make the network invariant to aspects
+  of the image that do not effet the label.
+
+  Additionally it would create image_summaries to display the different
+  transformations applied to the image.
+
+  Args:
+    image: 3-D Tensor of image. If dtype is tf.float32 then the range should be
+      [0, 1], otherwise it would converted to tf.float32 assuming that the range
+      is [0, MAX], where MAX is largest positive representable number for
+      int(8/16/32) data type (see `tf.image.convert_image_dtype` for details).
+    height: integer
+    width: integer
+    bbox: 3-D float Tensor of bounding boxes arranged [1, num_boxes, coords]
+      where each coordinate is [0, 1) and the coordinates are arranged
+      as [ymin, xmin, ymax, xmax].
+    fast_mode: Optional boolean, if True avoids slower transformations (i.e.
+      bi-cubic resizing, random_hue or random_contrast).
+    scope: Optional scope for name_scope.
+    add_image_summaries: Enable image summaries.
+    random_crop: Enable random cropping of images during preprocessing for
+      training.
+    use_grayscale: Whether to convert the image from RGB to grayscale.
+
+  Returns:
+    3-D float Tensor of distorted image used for training with range [-1, 1].
+  """
+  with tf.name_scope(scope, 'distort_image', [image, height, width, bbox]):
+    if bbox is None:
+      bbox = tf.constant([0.0, 0.0, 1.0, 1.0],
+                         dtype=tf.float32,
+                         shape=[1, 1, 4])
+    if image.dtype != tf.float32:
+      image = tf.image.convert_image_dtype(image, dtype=tf.float32)
+    # Each bounding box has shape [1, num_boxes, box coords] and
+    # the coordinates are ordered [ymin, xmin, ymax, xmax].
+    image_with_box = tf.image.draw_bounding_boxes(tf.expand_dims(image, 0),
+                                                  bbox)
+    if add_image_summaries:
+      tf.summary.image('image_with_bounding_boxes', image_with_box)
+    
+    if not random_crop:
+      distorted_image = image
+    else:
+      distorted_image, distorted_box = distorted_bounding_box_crop(image, bbox)
+
+  
+
+
 def preprocess_image(image,
                      height,
                      width,
@@ -32,15 +152,44 @@ def preprocess_image(image,
                      add_image_summaries=True,
                      crop_image=True,
                      use_grayscale=False):
-  """Preprocess single image.
+  """Pre-process one image for training or validation.
   
   Args:
     image: 3D Tensor [height, width, channels] of image. If dtype is
-      tf.float32 then the range should be [0, 1], otherwise it would converted
+      tf.float32 then the range should be [0, 1), otherwise it would converted
       to tf.float32 assuming that the range is [0, MAX], where MAX is largest
       positive representable number for int(8/16/32) data type (see
       `tf.image.convert_image_dtype` for details).
-    
-  """
-
+    height: integer, image expected height.
+    width: integer, image expected width.
+    is_training: Boolean. If true it would transform an image for train,
+      otherwise it would transform it for evaluation.
+    bbox: 3-D float Tensor of bounding boxes arranged [1, num_bboxes, coords]
+      where each coordicate is [0, 1) and the coordinates are arranged as
+      [ymin, xmin, ymax, xmax].
+    fast_mode: Optional boolean, if True avoids solwer transformations.
+    add_image_summaries: Enable image summaries.
+    crop_image: Whether to enable cropping of images during preprocessing for
+      both training and evaluation.
+    use_grayscale: Whether to convert the image from RGB to grayscale.
   
+  Returns:
+    3-D float Tensor containing an appropriately scaled image.
+  """
+  if is_training:
+    return preprocess_for_train(
+        image,
+        height,
+        width,
+        bbox,
+        fast_mode,
+        add_image_summaries=add_image_summaries,
+        random_crop=crop_image,
+        use_grayscale=use_grayscale)
+
+  return preprocess_for_eval(
+      image,
+      height,
+      width,
+      central_crop=crop_image,
+      use_grayscale=use_grayscale)

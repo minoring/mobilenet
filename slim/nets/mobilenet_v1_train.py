@@ -45,7 +45,7 @@ flags.DEFINE_string('checkpoint_dir', '',
                     'Directory for writing training checkpoints and logs')
 flags.DEFINE_string('dataset_dir', '', 'Location of dataset')
 flags.DEFINE_integer('log_every_n_steps', 100, 'Number of steps per log')
-flags.DEFINE_integer('save_summaries_secs', 100
+flags.DEFINE_integer('save_summaries_secs', 100,
                      'How often to save summaries, secs')
 flags.DEFINE_integer('save_interval_secs', 100,
                      'How often to save checkpoints, secs')
@@ -86,12 +86,12 @@ def imagenet_inputs(is_training):
     A batch of images and labels.
   """
   if is_training:
-    dataset = dataset_factory.get_dataset('imagenet', 'train', 
+    dataset = dataset_factory.get_dataset('imagenet', 'train',
                                           FLAGS.dataset_dir)
   else:
     dataset = dataset_factory.get_dataset('imagenet', 'validation',
                                           FLAGS.dataset_dir)
-  
+
   provider = slim.dataset_data_provider.DatasetDataProvider(
       dataset,
       shuffle=is_training,
@@ -121,7 +121,7 @@ def build_model():
           is_training=True,
           depth_multiplier=FLAGS.depth_multiplier,
           num_classes=FLAGS.num_classes)
-    
+
     tf.compat.v1.losses.softmax_cross_entropy(labels, logits)
 
     # Call rewriter to produce graph with fake quant ops and folded batch norms
@@ -147,7 +147,7 @@ def build_model():
     train_tensor = slim.learning.create_train_op(
         total_loss,
         optimizer=opt)
-    
+
   slim.summaries.add_scalar_summary(total_loss, 'total_loss', 'losses')
   slim.summaries.add_scalar_summary(learning_rate, 'learning_rate', 'training')
 
@@ -168,7 +168,7 @@ def get_checkpoint_init_fn():
         FLAGS.fine_tune_checkpoint,
         variables_to_restore,
         ignore_missing_vars=True)
-    
+
     def init_fn(sess):
       slim_init_fn(sess)
       # If we are restoring from a floating point model, we need to initialize
