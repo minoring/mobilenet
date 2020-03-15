@@ -14,10 +14,6 @@
 # ==============================================================================
 """A factory-pattern class which returns classification image/label pairs."""
 
-
-
-
-
 from datasets import cifar10
 from datasets import flowers
 from datasets import imagenet

@@ -29,9 +29,6 @@ WARNING: Don't use for object detection, in this case all the bounding boxes
 of the image belong to just one class.
 """
 
-
-
-
 import os
 from six.moves import urllib
 import tensorflow as tf

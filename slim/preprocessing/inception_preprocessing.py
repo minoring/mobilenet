@@ -15,9 +15,6 @@
 # ==============================================================================
 """Provides utilities to preprocess images for the Inception networks."""
 
-
-
-
 import tensorflow as tf
 
 from tensorflow.python.ops import control_flow_ops

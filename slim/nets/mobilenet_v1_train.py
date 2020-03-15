@@ -14,9 +14,6 @@
 # ==============================================================================
 """Build and train mobilenet_v1 with options for quantization"""
 
-
-
-
 import tensorflow as tf
 from tensorflow.contrib import quantize as contrib_quantize
 from tensorflow.contrib import slim as contrib_slim

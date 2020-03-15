@@ -14,9 +14,6 @@
 # ==============================================================================
 """Contains a factory of preprocessing for various models."""
 
-
-
-
 from tensorflow.contrib import slim as contrib_slim
 
 from preprocessing import inception_preprocessing
